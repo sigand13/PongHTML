@@ -1,198 +1,184 @@
-<!DOCTYPE html>
-<html>
+<!doctype html>
+<html lang="sv">
 <head>
-  <title>Basic Pong HTML Game</title>
-  <meta charset="UTF-8">
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Enkel Subway Surfers - HTML</title>
   <style>
-  html, body {
-    height: 100%;
-    margin: 0;
-  }
-
-  body {
-    background: black;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-  }
+    html,body{height:100%;margin:0;font-family:system-ui,Segoe UI,Roboto,Arial}
+    #game{background:linear-gradient(#87CEEB,#B0E0E6);width:100%;height:100vh;overflow:hidden;position:relative}
+    .ground{position:absolute;left:0;right:0;height:120px;bottom:0;background:linear-gradient(#444,#222)}
+    .player{width:48px;height:64px;background:#ff4757;border-radius:8px;position:absolute;bottom:120px;left:80px;box-shadow:0 6px 0 rgba(0,0,0,.2)}
+    .obstacle{width:40px;height:64px;background:#2f3542;border-radius:6px;position:absolute;bottom:120px;right:-60px}
+    .score{position:absolute;left:16px;top:16px;background:rgba(255,255,255,.9);padding:8px 12px;border-radius:8px;font-weight:700}
+    .instructions{position:absolute;right:16px;top:16px;background:rgba(255,255,255,.9);padding:8px 12px;border-radius:8px;font-size:13px}
+    .game-over{position:absolute;left:50%;top:40%;transform:translate(-50%,-50%);background:rgba(0,0,0,.75);color:#fff;padding:18px 22px;border-radius:10px;text-align:center;display:none}
+    button{margin-top:10px;padding:8px 12px;border-radius:8px;border:0;background:#ff4757;color:#fff;cursor:pointer}
   </style>
 </head>
 <body>
-<canvas width="750" height="585" id="game"></canvas>
-<script>
-const canvas = document.getElementById('game');
-const context = canvas.getContext('2d');
-const grid = 15;
-const paddleHeight = grid * 5; // 80
-const maxPaddleY = canvas.height - grid - paddleHeight;
+  <div id="game">
+    <div class="score" id="score">Poäng: 0</div>
+    <div class="instructions">Hoppa: mellanslag/uppåt • Vänster: A • Höger: D</div>
+    <div class="ground"></div>
+    <div class="player" id="player"></div>
+    <div class="game-over" id="gameOver">
+      <div id="goText">Game over</div>
+      <div id="finalScore" style="margin-top:8px;font-weight:700"></div>
+      <button id="restart">Spela igen</button>
+    </div>
+  </div>
 
-var paddleSpeed = 6;
-var ballSpeed = 5;
+  <script>
+    const player = document.getElementById('player')
+    const game = document.getElementById('game')
+    const scoreEl = document.getElementById('score')
+    const gameOverEl = document.getElementById('gameOver')
+    const finalScore = document.getElementById('finalScore')
+    const restartBtn = document.getElementById('restart')
 
-const leftPaddle = {
-  // start in the middle of the game on the left side
-  x: grid * 2,
-  y: canvas.height / 2 - paddleHeight / 2,
-  width: grid,
-  height: paddleHeight,
+    let vy = 0
+    let vx = 0
+    const gravity = 0.9
+    const jumpImpulse = -16
+    const groundY = 120
+    let playerY = 0
+    let playerX = 80
+    let isRunning = true
+    let obstacles = []
+    let spawnTimer = 0
+    let spawnInterval = 90
+    let score = 0
 
-  // paddle velocity
-  dy: 0
-};
-const rightPaddle = {
-  // start in the middle of the game on the right side
-  x: canvas.width - grid * 3,
-  y: canvas.height / 2 - paddleHeight / 2,
-  width: grid,
-  height: paddleHeight,
+    function createObstacle(){
+      const el = document.createElement('div')
+      el.className = 'obstacle'
+      game.appendChild(el)
+      const obj = {el, x: game.clientWidth, w: 40, h: 64}
+      obstacles.push(obj)
+    }
 
-  // paddle velocity
-  dy: 0
-};
-const ball = {
-  // start in the middle of the game
-  x: canvas.width / 2,
-  y: canvas.height / 2,
-  width: grid,
-  height: grid,
+    function reset(){
+      vy = 0
+      vx = 0
+      playerY = 0
+      playerX = 80
+      isRunning = true
+      obstacles.forEach(o=>o.el.remove())
+      obstacles = []
+      spawnTimer = 0
+      spawnInterval = 90
+      score = 0
+      scoreEl.textContent = 'Poäng: 0'
+      gameOverEl.style.display = 'none'
+    }
 
-  // keep track of when need to reset the ball position
-  resetting: false,
+    function endGame(){
+      isRunning = false
+      finalScore.textContent = 'Poäng: ' + Math.floor(score)
+      gameOverEl.style.display = 'block'
+    }
 
-  // ball velocity (start going to the top-right corner)
-  dx: ballSpeed,
-  dy: -ballSpeed
-};
+    restartBtn.addEventListener('click', ()=>{
+      reset()
+      loop()
+    })
 
-// check for collision between two objects using axis-aligned bounding box (AABB)
-// @see https://developer.mozilla.org/en-US/docs/Games/Techniques/2D_collision_detection
-function collides(obj1, obj2) {
-  return obj1.x < obj2.x + obj2.width &&
-         obj1.x + obj1.width > obj2.x &&
-         obj1.y < obj2.y + obj2.height &&
-         obj1.y + obj1.height > obj2.y;
-}
+    function collide(aX,aY,aW,aH,bX,bY,bW,bH){
+      return aX < bX + bW && aX + aW > bX && aY < bY + bH && aY + aH > bY
+    }
 
-// game loop
-function loop() {
-  requestAnimationFrame(loop);
-  context.clearRect(0,0,canvas.width,canvas.height);
+    let last = performance.now()
+    function loop(now){
+      if(!isRunning) return
+      const dt = (now - last) / 16.6667
+      last = now
 
-  // move paddles by their velocity
-  leftPaddle.y += leftPaddle.dy;
-  rightPaddle.y += rightPaddle.dy;
+      vy += gravity * dt
+      playerY += vy * dt
+      if(playerY > 0){
+        playerY = 0
+        vy = 0
+      }
 
-  // prevent paddles from going through walls
-  if (leftPaddle.y < grid) {
-    leftPaddle.y = grid;
-  }
-  else if (leftPaddle.y > maxPaddleY) {
-    leftPaddle.y = maxPaddleY;
-  }
+      playerX += vx * dt * 5
+      if(playerX < 0) playerX = 0
+      if(playerX > game.clientWidth - 60) playerX = game.clientWidth - 60
 
-  if (rightPaddle.y < grid) {
-    rightPaddle.y = grid;
-  }
-  else if (rightPaddle.y > maxPaddleY) {
-    rightPaddle.y = maxPaddleY;
-  }
+      player.style.left = playerX + 'px'
+      player.style.bottom = groundY + playerY + 'px'
 
-  // draw paddles
-  context.fillStyle = 'white';
-  context.fillRect(leftPaddle.x, leftPaddle.y, leftPaddle.width, leftPaddle.height);
-  context.fillRect(rightPaddle.x, rightPaddle.y, rightPaddle.width, rightPaddle.height);
+      spawnTimer++
+      if(spawnTimer > spawnInterval){
+        createObstacle()
+        spawnTimer = 0
+        if(spawnInterval > 40) spawnInterval -= 2
+      }
 
-  // move ball by its velocity
-  ball.x += ball.dx;
-  ball.y += ball.dy;
+      for(let i = obstacles.length-1; i>=0; i--){
+        const o = obstacles[i]
+        o.x -= 6 * dt
+        o.el.style.right = (game.clientWidth - o.x - o.w) + 'px'
 
-  // prevent ball from going through walls by changing its velocity
-  if (ball.y < grid) {
-    ball.y = grid;
-    ball.dy *= -1;
-  }
-  else if (ball.y + grid > canvas.height - grid) {
-    ball.y = canvas.height - grid * 2;
-    ball.dy *= -1;
-  }
+        const px = playerX
+        const py = game.clientHeight - groundY - 64 + playerY
+        const pw = 48
+        const ph = 64
+        const ox = o.x
+        const oy = game.clientHeight - groundY - o.h
 
-  // reset ball if it goes past paddle (but only if we haven't already done so)
-  if ( (ball.x < 0 || ball.x > canvas.width) && !ball.resetting) {
-    ball.resetting = true;
+        if(collide(px,py,pw,ph, ox,oy,o.w,o.h)){
+          endGame()
+          return
+        }
 
-    // give some time for the player to recover before launching the ball again
-    setTimeout(() => {
-      ball.resetting = false;
-      ball.x = canvas.width / 2;
-      ball.y = canvas.height / 2;
-    }, 400);
-  }
+        if(o.x + o.w < -100){
+          o.el.remove()
+          obstacles.splice(i,1)
+          score += 10
+          scoreEl.textContent = 'Poäng: ' + Math.floor(score)
+        }
+      }
 
-  // check to see if ball collides with paddle. if they do change x velocity
-  if (collides(ball, leftPaddle)) {
-    ball.dx *= -1;
+      score += 0.05 * dt
+      scoreEl.textContent = 'Poäng: ' + Math.floor(score)
 
-    // move ball next to the paddle otherwise the collision will happen again
-    // in the next frame
-    ball.x = leftPaddle.x + leftPaddle.width;
-  }
-  else if (collides(ball, rightPaddle)) {
-    ball.dx *= -1;
+      requestAnimationFrame(loop)
+    }
 
-    // move ball next to the paddle otherwise the collision will happen again
-    // in the next frame
-    ball.x = rightPaddle.x - ball.width;
-  }
+    function jump(){
+      if(!isRunning) return
+      if(playerY === 0){
+        vy = jumpImpulse
+      }
+    }
 
-  // draw ball
-  context.fillRect(ball.x, ball.y, ball.width, ball.height);
+    window.addEventListener('keydown', e=>{
+      if(e.code === 'Space' || e.code === 'ArrowUp'){
+        e.preventDefault()
+        jump()
+      }
+      if(e.code === 'KeyA' || e.code === 'ArrowLeft'){
+        vx = -2
+      }
+      if(e.code === 'KeyD' || e.code === 'ArrowRight'){
+        vx = 2
+      }
+    })
 
-  // draw walls
-  context.fillStyle = 'lightgrey';
-  context.fillRect(0, 0, canvas.width, grid);
-  context.fillRect(0, canvas.height - grid, canvas.width, canvas.height);
+    window.addEventListener('keyup', e=>{
+      if(['KeyA','ArrowLeft','KeyD','ArrowRight'].includes(e.code)){
+        vx = 0
+      }
+    })
 
-  // draw dotted line down the middle
-  for (let i = grid; i < canvas.height - grid; i += grid * 2) {
-    context.fillRect(canvas.width / 2 - grid / 2, i, grid, grid);
-  }
-}
+    window.addEventListener('touchstart', e=>{
+      e.preventDefault()
+      jump()
+    },{passive:false})
 
-// listen to keyboard events to move the paddles
-document.addEventListener('keydown', function(e) {
-
-  // up arrow key
-  if (e.which === 38) {
-    rightPaddle.dy = -paddleSpeed;
-  }
-  // down arrow key
-  else if (e.which === 40) {
-    rightPaddle.dy = paddleSpeed;
-  }
-
-  // w key
-  if (e.which === 87) {
-    leftPaddle.dy = -paddleSpeed;
-  }
-  // a key
-  else if (e.which === 83) {
-    leftPaddle.dy = paddleSpeed;
-  }
-});
-
-// listen to keyboard events to stop the paddle if key is released
-document.addEventListener('keyup', function(e) {
-  if (e.which === 38 || e.which === 40) {
-    rightPaddle.dy = 0;
-  }
-
-  if (e.which === 83 || e.which === 87) {
-    leftPaddle.dy = 0;
-  }
-});
-
-// start the game
-requestAnimationFrame(loop);
-</script>
+    reset()
+    requestAnimationFrame(loop)
+  </script>
 </body>
 </html>
